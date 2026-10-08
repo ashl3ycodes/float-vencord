@@ -54,3 +54,7 @@ Original Float by [maenDisease](https://github.com/maenDisease). This is a rewri
 Discord UI, not a copy of its code; the idea, the behaviour and the knob names are theirs.
 
 See also [float-spicetify](https://github.com/ashl3ycodes/float-spicetify), the same thing for Spotify.
+
+## License
+
+[AGPL-3.0](LICENSE)
