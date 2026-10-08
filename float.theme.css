@@ -1,0 +1,426 @@
+/**
+ * @name Float
+ * @description A practical compact mobile Discord: the channel list and member list collapse to icon strips that slide open on hover, pushing the rest of the app aside, plus window-width presets. Port of maenDisease's archived Float for the 2025 Discord UI; works on top of system24/midnight.
+ * @author maenDisease (original Float), ported to Vencord by ashl3ycodes
+ * @version 2.0.0
+ * @source https://github.com/ashl3ycodes/float-vencord
+ * @website https://github.com/maenDisease/Float
+*/
+
+/* ==========================================================================
+ * KNOBS. Edit these (or the width presets below them) to taste.
+ * ========================================================================== */
+:root {
+    /* Guild list */
+    --guildicon-size: 48;               /* server icon size, unitless; 48 = Discord's own size, 40 = 5/6 of it */
+    --guildlist-collapse: 0;            /* 1: guild list hides behind a thin strip at the window's left edge, hover it to open */
+
+    /* Channel sidebar (channel list + user panel) */
+    --slide-window-on-hover: 1;         /* 1: the chat slides right when the sidebar opens, 0: the sidebar covers it */
+    --float-sidebar-width: 48;          /* collapsed width, unitless px; 0 hides it (hover the guild list to peek) */
+    --sidebar-hover-width: 240px;
+    --sidebar-hover-delay: 0s;          /* how long to rest on it before it opens */
+    --sidebar-transition-duration: 0.4s;
+
+    /* Member list / DM profile panel */
+    --slide-window-on-members-hover: 1; /* 1: everything slides left when it opens, 0: it covers the chat */
+    --float-members-width: 65px;        /* collapsed width, avatars only; 0px hides it */
+    --members-hover-width: 240px;       /* the DM profile panel opens to at least its own 300px */
+    --members-hover-delay: 0s;
+    --members-transition-duration: 0.4s;
+
+    /* Channel header */
+    --topic-opacity: 1;
+    --toolbar-visibility: flex;         /* flex | none. none hides the extra header buttons until you hover the toolbar */
+
+    /* Composer buttons: flex | none */
+    --textarea-buttons-gif: flex;
+    --textarea-buttons-sticker: flex;
+    --textarea-buttons-gift: none;
+}
+
+/* Window-width presets: each block overrides the knobs at that width or narrower.
+   Edit or delete them freely. */
+@media (max-width: 700px) {
+    :root {
+        --topic-opacity: 0;
+        --toolbar-visibility: none;
+        --textarea-buttons-gif: none;
+        --textarea-buttons-sticker: none;
+    }
+}
+
+@media (max-width: 500px) {
+    :root {
+        --guildicon-size: 40;
+        --float-members-width: 0px;
+    }
+}
+
+@media (max-width: 400px) {
+    :root {
+        --float-sidebar-width: 0;
+    }
+}
+
+@media (max-width: 300px) {
+    :root {
+        --guildlist-collapse: 1;
+    }
+}
+
+/* Dropped from the 2024 theme: --enable-if-using-favorites-experiment (favorites is
+   built in now), --sidebar-window-gap / --sidebar-border-radius (the theme's own
+   --gap and corners are used), --sidebar-usersettings-width (Float's settings
+   rules were already disabled upstream). Labels matched below (GIF, gift) are the
+   English client's. */
+
+/* ==========================================================================
+ * Internals
+ * ========================================================================== */
+:root {
+    --guildbar-avatar-size: round(calc(var(--guildicon-size) * 40px / 48), 1px);
+    --guildbar-folder-size: calc(var(--guildbar-avatar-size) + 8px);
+}
+
+/* Discord's icon slot stays 40px when the icon shrinks: center the icon in it */
+[class*=' guilds_'] foreignObject [data-list-item-id^='guildsnav___'] {
+    margin: calc(50% - var(--guildbar-avatar-size) / 2) auto 0;
+}
+
+/* The app: top bar, guild list, channel sidebar and page share one grid. The open/closed
+   state lives here as 0/1 switches so every piece reads the same values. */
+[class^='base_']:has(> [class^='content_'] > [class^='sidebar_'] > [class^='sidebarList_']) {
+    --float-bw: var(--border-thickness, 1px);
+    --float-gap: var(--gap, 0px);
+    --float-sb-on: sign(var(--float-sidebar-width)); /* 0 when the sidebar is hidden */
+    --float-sb-closed: calc(var(--float-sidebar-width) * 1px);
+    --float-sb-open: 0;
+    --float-gl-w: var(--custom-guild-list-width);
+    --float-gl-open: 0;
+
+    /* hovering the channel list or the user panel opens the sidebar */
+    &:has(> [class^='content_'] > [class^='sidebar_'] > :is([class^='sidebarList_'], [class^='panels_']):hover) {
+        --float-sb-open: 1;
+    }
+
+    /* anything else in the sidebar column (guild list, gaps, edge strip) keeps a collapsed
+       guild list open and, with the sidebar hidden, peeks the sidebar open. Less specific
+       than the rule above, so the channel list itself still always opens it. */
+    &:has(> [class^='content_'] > [class^='sidebar_']:hover) {
+        --float-gl-open: 1;
+        --float-sb-open: calc(1 - var(--float-sb-on));
+    }
+
+    /* the member list opening pushes the whole app left (Float only had this on the sidebar) */
+    --float-m-push: 0px;
+    --float-m-delay: 0s;
+
+    &:has(> [class^='content_'] > [class^='page_'] :is(aside[class^='membersWrap_'], .user-profile-sidebar):hover) {
+        --float-m-push: calc(var(--slide-window-on-members-hover) * (var(--members-hover-width) - var(--float-members-width)));
+        --float-m-delay: var(--members-hover-delay);
+    }
+
+    /* `aside >` matches the specificity of the :is() above, so this one wins */
+    &:has(> [class^='content_'] > [class^='page_'] aside > .user-profile-sidebar:hover) {
+        --float-m-push: calc(var(--slide-window-on-members-hover) * (max(var(--members-hover-width), 300px) - var(--float-members-width)));
+    }
+
+    --float-sb-max: min(var(--sidebar-hover-width), 100vw - var(--float-gl-w) - 3 * var(--float-gap)); /* never past the window edge */
+    --float-sb: calc(var(--float-sb-closed) + var(--float-sb-open) * (var(--float-sb-max) - var(--float-sb-closed)));
+    --float-sb-shown: max(var(--float-sb-on), var(--float-sb-open));
+    --float-sb-delay: calc(var(--float-sb-open) * var(--sidebar-hover-delay));
+    --float-gl: calc(var(--float-gl-w) * (1 - var(--guildlist-collapse) * (1 - var(--float-gl-open))));
+    --float-gl-shift: calc(var(--guildlist-collapse) * var(--float-gl-open) * (var(--float-gl-w) + var(--float-gap)));
+    /* a negative start margin widens the whole grid leftwards (not the content subgrid: its
+       margin is shared out among its edge tracks), so the page column alone gains exactly what
+       the member list grows. Guilds, channels and chat move over and nothing reflows. */
+    margin-inline-start: calc(-1 * var(--float-m-push));
+    transition: margin var(--members-transition-duration) var(--float-m-delay) ease;
+
+    --float-page-x: calc(var(--slide-window-on-hover) * (var(--float-gl-shift) + var(--float-sb-open) * (var(--float-sb-max) - var(--float-sb-closed) + (1 - var(--float-sb-on)) * var(--float-gap))));
+
+    > [class^='content_'] > [class^='sidebar_'] {
+        margin-inline-end: calc(var(--float-sb-on) * var(--float-gap));
+
+        /* above system24's header buttons (1000), below Discord's popout layers (1002) */
+        > :is([class*=' guilds_'], [class^='sidebarList_'], [class^='panels_']) {
+            z-index: 1001;
+        }
+
+        /* hover catcher for the collapsed guild list: the window's left edge, and once it is
+           open, the gap after it too, so the pointer can cross to the peeked channel list */
+        &::before {
+            content: '';
+            position: absolute;
+            z-index: 1001;
+            inset-block: 0;
+            inset-inline-start: calc(-1 * var(--float-gap));
+            width: calc(var(--guildlist-collapse) * max(10px, var(--float-gap)) + var(--float-gl-shift));
+        }
+
+        > [class*=' guilds_'] {
+            --float-gl-shown: calc(1 - var(--guildlist-collapse) * (1 - var(--float-gl-open)));
+            overflow-x: clip !important;
+            width: var(--float-gl);
+            border-inline-width: calc(var(--float-gl-shown) * var(--float-bw));
+            margin-inline-end: calc((1 - var(--guildlist-collapse)) * (var(--float-gl-w) + var(--float-gap)) - var(--float-gl));
+            box-shadow: 0 0 0 calc(var(--float-gl-shown) * var(--float-gap)) var(--background-base-low);
+            transition:
+                width var(--sidebar-transition-duration) ease,
+                margin var(--sidebar-transition-duration) ease,
+                border-width var(--sidebar-transition-duration) ease;
+        }
+
+        > [class^='sidebarList_'],
+        > [class^='panels_'] {
+            /* children keep their open width; the box only clips them */
+            overflow-x: clip !important;
+            width: var(--float-sb);
+            border-inline-width: calc(var(--float-sb-shown) * var(--float-bw));
+            /* paint the gaps around the box so a covered chat doesn't show through them */
+            box-shadow: 0 0 0 calc(var(--float-sb-shown) * var(--float-gap)) var(--background-base-low);
+            transition:
+                width var(--sidebar-transition-duration) var(--float-sb-delay) ease,
+                margin var(--sidebar-transition-duration) var(--float-sb-delay) ease,
+                border-width var(--sidebar-transition-duration) var(--float-sb-delay) ease,
+                left var(--sidebar-transition-duration) ease;
+
+            > * {
+                width: calc(var(--float-sb-max) - 2 * var(--float-bw));
+            }
+        }
+
+        > [class^='sidebarList_'] {
+            container-type: normal; /* Discord blanks the list below 100px with a container query */
+            position: relative;
+            left: var(--float-gl-shift);
+            margin-inline-end: calc(var(--float-sb-closed) - var(--float-sb));
+
+            /* bridge the gap down to the user panel so crossing it doesn't close the sidebar */
+            &::before {
+                content: '';
+                position: absolute;
+                inset-inline: 0;
+                top: 100%;
+                height: calc(var(--float-gap) + 2 * var(--float-bw));
+            }
+        }
+
+        /* names (and the guild name, DM search label + section header) fade while only the icons show */
+        > [class^='sidebarList_'] :is(li [class*='name_'], [class^='searchBar_'] [class^='overflow_'], [class^='headerText_'], [class^='guildDropdown_']) {
+            opacity: calc(1 - var(--float-sb-on) * (1 - var(--float-sb-open)));
+            transition: opacity var(--sidebar-transition-duration) var(--float-sb-delay) ease;
+        }
+
+        /* DM rows are inset 14px: slide them left while closed so a 32px avatar fits the strip */
+        > [class^='sidebarList_'] li[class*=' dm_'] {
+            position: relative;
+            left: calc((1 - var(--float-sb-open)) * var(--float-sb-on) * -8px);
+            transition: left var(--sidebar-transition-duration) var(--float-sb-delay) ease;
+        }
+
+        > [class^='panels_'] {
+            left: calc(100% - var(--float-sb-closed) + var(--float-gl-shift));
+            right: auto;
+        }
+
+        > [class^='sidebarResizeHandle_'] {
+            display: none;
+        }
+    }
+
+    > [class^='content_'] > [class^='page_'] {
+        left: var(--float-page-x);
+        transition: left var(--sidebar-transition-duration) var(--float-sb-delay) ease;
+    }
+}
+
+/* midnight/system24 float the inbox buttons over the channel header: slide them with it */
+@container body style(--top-bar-button-position: titlebar) {
+    [class^='base_'] > [class^='bar_'] > [class^='trailing_'] {
+        translate: var(--float-page-x, 0px) 0;
+        transition: translate var(--sidebar-transition-duration) var(--float-sb-delay, 0s) ease;
+    }
+}
+
+/* ---------- Member list (server, group DM, forum post) and DM profile panel ---------- */
+[class^='chat_'] > [class^='content_'] > :is([class^='container_']:has(> aside[class^='membersWrap_']), aside[class^='membersWrap_'], aside:has(> .user-profile-sidebar)) {
+    --float-m-on: sign(var(--float-members-width));
+    --float-m-max: var(--members-hover-width);
+    --float-m-open: 0;
+
+    &:hover {
+        --float-m-open: 1;
+        box-shadow: 0 8px 24px rgb(0 0 0 / calc((1 - var(--slide-window-on-members-hover)) * 0.5));
+    }
+
+    --float-m: calc(var(--float-members-width) + var(--float-m-open) * (var(--float-m-max) - var(--float-members-width)));
+    flex: none;
+    position: relative;
+    z-index: 3;
+    min-width: 0 !important;
+    width: var(--float-m);
+    margin-inline-start: calc(var(--float-m-on) * var(--gap, 0px) + (1 - var(--slide-window-on-members-hover)) * (var(--float-members-width) - var(--float-m)));
+    border-inline-width: calc(max(var(--float-m-on), var(--float-m-open)) * var(--border-thickness, 0px));
+    overflow-x: clip !important;
+    transition:
+        width var(--members-transition-duration) calc(var(--float-m-open) * var(--members-hover-delay)) ease,
+        margin var(--members-transition-duration) calc(var(--float-m-open) * var(--members-hover-delay)) ease,
+        box-shadow 0.2s ease;
+
+    /* Discord sizes the list from this; keep it at the open width so the box only clips it */
+    --custom-member-list-width: calc(var(--float-m-max) - 2 * var(--border-thickness, 0px));
+
+    > * {
+        flex: none;
+    }
+
+    /* the DM profile card is laid out at a fixed 300px and carries its own border */
+    &:has(> .user-profile-sidebar) {
+        --float-m-max: max(var(--members-hover-width), 300px);
+        justify-content: flex-start;
+
+        > .user-profile-sidebar {
+            margin-inline-start: 0;
+        }
+    }
+
+    /* names and group headers fade while only the avatars show */
+    :is([class^='memberInner_'] > [class^='content_'], [class*=' membersGroup_']) {
+        opacity: var(--float-m-open);
+        transition: opacity var(--members-transition-duration) calc(var(--float-m-open) * var(--members-hover-delay)) ease;
+    }
+}
+
+/* ---------- Channel header ---------- */
+/* the topic and the divider in front of it; in DMs, the user's status */
+[class^='upperContainer_'] > [class^='children_'] > :is([class^='topic_'], svg:has(+ [class^='topic_']), [class^='dmHeaderActivity']) {
+    opacity: var(--topic-opacity);
+}
+
+[class^='upperContainer_'] > [class^='toolbar_'] {
+    /* extra buttons hide; the last icon (member list / profile) and search stay */
+    > [class*='iconWrapper_']:not(:nth-last-child(-n + 2), [class*=' selected_']) {
+        display: var(--toolbar-visibility);
+    }
+
+    &:hover {
+        --toolbar-visibility: flex;
+    }
+}
+
+/* ---------- Composer ---------- */
+/* Not in the 2024 theme: plugin and Apps buttons now crowd narrow composers, so when the
+   text field would drop under 10 characters the buttons wrap to a second row instead. */
+[class^='channelTextArea_'] [class^='inner_'] {
+    flex-wrap: wrap;
+
+    > [class*='textArea_'] {
+        flex: 1 0 10ch;
+    }
+
+    > [class^='buttons_'] {
+        margin-inline-start: auto;
+    }
+}
+
+[class^='channelTextArea_'] [class^='buttons_'] {
+    > :has(> [aria-label='Open GIF picker']) {
+        display: var(--textarea-buttons-gif);
+    }
+
+    > :has(> [class*='stickerButton_']) {
+        display: var(--textarea-buttons-sticker);
+    }
+
+    > :has(> [aria-label='Send a gift']) {
+        display: var(--textarea-buttons-gift);
+    }
+}
+
+/* ---------- Messages: the cozy header stays on one line ---------- */
+[class*=' cozy_'] :is(h2, h3)[class^='header_'] { /* h2 in the Inbox */
+    display: flex;
+    align-items: baseline;
+    white-space: nowrap;
+
+    > [class^='headerText_'] {
+        display: flex;
+        align-items: baseline;
+        min-width: 0;
+
+        /* tags and badges give up their room before the name does */
+        > * {
+            flex: 0 4 auto;
+            min-width: 0;
+            overflow: clip; /* hidden would drop the baseline and add a blank line */
+        }
+
+        /* Discord's copy-only tag text wraps; squeezed to nothing it would add a line */
+        * {
+            white-space: nowrap;
+        }
+
+        > [class^='username_'] {
+            flex-shrink: 1;
+            text-overflow: ellipsis;
+        }
+    }
+
+    > [class^='timestamp_'] {
+        flex: none;
+    }
+}
+
+/* ---------- Search results float over the chat instead of squeezing it ---------- */
+[class^='searchResultsWrap_'] {
+    position: absolute;
+    inset-block: 0;
+    inset-inline-end: 0;
+    max-width: 100%;
+    z-index: 3;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.5);
+}
+
+/* ---------- Inbox: Discord's popout is a fixed 480px; pin it inside the window ---------- */
+[class*=' layer_']:has(> [role='dialog'][aria-label='Inbox']) {
+    left: auto !important;
+    right: var(--gap, 8px) !important;
+
+    > [role='dialog'] > [class^='container_'] {
+        min-width: min(480px, 100vw - 2 * var(--gap, 8px));
+    }
+}
+
+/* ---------- Image viewer: below 485px the buttons get their own row at the bottom ---------- */
+@media (max-width: 485px) {
+    [class*='carouselModal_'] [class^='actionButtons_'] {
+        position: absolute;
+        inset-inline: 0;
+        bottom: 0;
+        width: fit-content;
+        max-width: 100%;
+        margin-inline: auto;
+        flex-wrap: wrap;
+        justify-content: center;
+    }
+}
+
+/* ---------- Threads: Discord floats them at a fixed 450px; keep them inside narrow pages ---------- */
+[class^='chatLayerWrapper_']:has(> [class*=' floating_']) {
+    inset-inline-start: 0;
+    pointer-events: none;
+
+    > * {
+        max-width: 100%;
+        pointer-events: auto;
+    }
+}
+
+/* ---------- Forum channels: drop Discord's 320px floor so narrow windows don't clip ---------- */
+div:has(> [data-list-id^='forum-channel-list']),
+div[data-list-id^='forum-channel-list'] > div:first-child,
+[data-list-id^='forum-channel-list'] [class*=' headerRow_'] {
+    min-width: 0;
+}
